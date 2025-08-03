@@ -1,0 +1,871 @@
+Below is a minimal, functional PHP application called **Next Prompt Manager** that fulfills all your requirements.  
+**The code is split into multiple files** as per best practice.  
+**All requirements are referenced in comments** at the relevant code locations.  
+**The UI is intentionally minimal and clean.**
+
+---
+
+## Directory Structure
+
+```
+next-prompt-manager/
+├── config.php
+├── db.php
+├── functions.php
+├── index.php
+├── login.php
+├── dashboard.php
+├── prompt.php
+├── prompt_edit.php
+├── prompt_delete.php
+├── prompt_export.php
+├── prompt_share.php
+├── prompt_api.php
+├── token_generate.php
+├── assets/
+│   └── style.css
+```
+
+---
+
+## 1. config.php
+
+```php
+<?php
+// Database configuration
+define('DB_HOST', 'localhost');
+define('DB_NAME', 'next_prompt_manager');
+define('DB_USER', 'root');
+define('DB_PASS', 'password'); // Change as needed
+
+// Application name
+define('APP_NAME', 'Next Prompt Manager');
+?>
+```
+
+---
+
+## 2. db.php
+
+```php
+<?php
+require_once 'config.php';
+
+function get_db() {
+    static $db = null;
+    if ($db === null) {
+        $db = new PDO(
+            'mysql:host=' . DB_HOST . ';dbname=' . DB_NAME . ';charset=utf8mb4',
+            DB_USER, DB_PASS,
+            [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
+        );
+    }
+    return $db;
+}
+?>
+```
+
+---
+
+## 3. functions.php
+
+```php
+<?php
+require_once 'db.php';
+
+// --- Requirement: Generate UID Access Token ---
+function generate_token($length = 64) {
+    return bin2hex(random_bytes($length / 2));
+}
+
+// --- Requirement: Store token in DB ---
+function store_token($token, $prompt_id = null, $is_dashboard = false, $expires = null) {
+    $db = get_db();
+    $stmt = $db->prepare("INSERT INTO access_tokens (token, prompt_id, is_dashboard_token, expires_at) VALUES (?, ?, ?, ?)");
+    $stmt->execute([$token, $prompt_id, $is_dashboard ? 1 : 0, $expires]);
+}
+
+// --- Requirement: Access Control via Token ---
+function validate_token($token, $prompt_id = null, $dashboard = false) {
+    $db = get_db();
+    if ($dashboard) {
+        $stmt = $db->prepare("SELECT * FROM access_tokens WHERE token = ? AND is_dashboard_token = 1");
+        $stmt->execute([$token]);
+    } else if ($prompt_id !== null) {
+        $stmt = $db->prepare("SELECT * FROM access_tokens WHERE token = ? AND (prompt_id = ? OR is_dashboard_token = 1)");
+        $stmt->execute([$token, $prompt_id]);
+    } else {
+        $stmt = $db->prepare("SELECT * FROM access_tokens WHERE token = ?");
+        $stmt->execute([$token]);
+    }
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($row && (!$row['expires_at'] || strtotime($row['expires_at']) > time())) {
+        return true;
+    }
+    return false;
+}
+
+// --- Requirement: Store Prompts with Metadata ---
+function add_prompt($data) {
+    $db = get_db();
+    $stmt = $db->prepare("INSERT INTO prompts (prompt, description, topic, tags, favorite, stage, llm_params, version, is_public) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)");
+    $stmt->execute([
+        $data['prompt'], $data['description'], $data['topic'], $data['tags'],
+        !empty($data['favorite']) ? 1 : 0,
+        $data['stage'], $data['llm_params'],
+        !empty($data['is_public']) ? 1 : 0
+    ]);
+    return $db->lastInsertId();
+}
+
+// --- Requirement: Retrieve and Display All Prompts (with pagination, search, filters) ---
+function get_prompts($page = 1, $search = '', $tags = [], $favorite = null) {
+    $db = get_db();
+    $limit = 5;
+    $offset = ($page - 1) * $limit;
+    $where = [];
+    $params = [];
+    if ($search) {
+        $where[] = "MATCH(prompt, description, tags) AGAINST (?)";
+        $params[] = $search;
+    }
+    if ($tags && count($tags)) {
+        $tag_like = [];
+        foreach ($tags as $tag) {
+            $tag_like[] = "FIND_IN_SET(?, tags)";
+            $params[] = $tag;
+        }
+        $where[] = '(' . implode(' OR ', $tag_like) . ')';
+    }
+    if ($favorite !== null) {
+        $where[] = "favorite = ?";
+        $params[] = $favorite ? 1 : 0;
+    }
+    $sql = "SELECT * FROM prompts";
+    if ($where) $sql .= " WHERE " . implode(' AND ', $where);
+    $sql .= " ORDER BY updated_at DESC LIMIT $limit OFFSET $offset";
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function get_prompts_count($search = '', $tags = [], $favorite = null) {
+    $db = get_db();
+    $where = [];
+    $params = [];
+    if ($search) {
+        $where[] = "MATCH(prompt, description, tags) AGAINST (?)";
+        $params[] = $search;
+    }
+    if ($tags && count($tags)) {
+        $tag_like = [];
+        foreach ($tags as $tag) {
+            $tag_like[] = "FIND_IN_SET(?, tags)";
+            $params[] = $tag;
+        }
+        $where[] = '(' . implode(' OR ', $tag_like) . ')';
+    }
+    if ($favorite !== null) {
+        $where[] = "favorite = ?";
+        $params[] = $favorite ? 1 : 0;
+    }
+    $sql = "SELECT COUNT(*) FROM prompts";
+    if ($where) $sql .= " WHERE " . implode(' AND ', $where);
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    return $stmt->fetchColumn();
+}
+
+// --- Requirement: Retrieve Single Prompt ---
+function get_prompt($id) {
+    $db = get_db();
+    $stmt = $db->prepare("SELECT * FROM prompts WHERE id = ?");
+    $stmt->execute([$id]);
+    return $stmt->fetch(PDO::FETCH_ASSOC);
+}
+
+// --- Requirement: Edit Prompt (with version control) ---
+function update_prompt($id, $data, $change_desc) {
+    $db = get_db();
+    $prompt = get_prompt($id);
+
+    // Store old version
+    $stmt = $db->prepare("INSERT INTO prompt_versions (prompt_id, version, prompt, description, topic, tags, favorite, stage, llm_params, change_desc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    $stmt->execute([
+        $id, $prompt['version'] + 1, $data['prompt'], $data['description'], $data['topic'], $data['tags'],
+        !empty($data['favorite']) ? 1 : 0, $data['stage'], $data['llm_params'], $change_desc
+    ]);
+
+    // Update prompt
+    $stmt = $db->prepare("UPDATE prompts SET prompt=?, description=?, topic=?, tags=?, favorite=?, stage=?, llm_params=?, version=version+1 WHERE id=?");
+    $stmt->execute([
+        $data['prompt'], $data['description'], $data['topic'], $data['tags'],
+        !empty($data['favorite']) ? 1 : 0, $data['stage'], $data['llm_params'], $id
+    ]);
+}
+
+// --- Requirement: Delete Prompt ---
+function delete_prompt($id) {
+    $db = get_db();
+    $stmt = $db->prepare("DELETE FROM prompts WHERE id = ?");
+    $stmt->execute([$id]);
+}
+
+// --- Requirement: Version History ---
+function get_prompt_versions($prompt_id) {
+    $db = get_db();
+    $stmt = $db->prepare("SELECT * FROM prompt_versions WHERE prompt_id = ? ORDER BY version DESC");
+    $stmt->execute([$prompt_id]);
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function get_prompt_version($version_id) {
+    $db = get_db();
+    $stmt = $db->prepare("SELECT * FROM prompt_versions WHERE id = ?");
+    $stmt->execute([$version_id]);
+    return $stmt->fetch(PDO::FETCH_ASSOC);
+}
+
+// --- Requirement: Toggle Favorite Flag ---
+function toggle_favorite($id, $is_favorite) {
+    $db = get_db();
+    $stmt = $db->prepare("UPDATE prompts SET favorite = ? WHERE id = ?");
+    $stmt->execute([$is_favorite ? 1 : 0, $id]);
+}
+
+// --- Requirement: Share/Unshare Prompt ---
+function set_public($id, $is_public) {
+    $db = get_db();
+    $stmt = $db->prepare("UPDATE prompts SET is_public = ? WHERE id = ?");
+    $stmt->execute([$is_public ? 1 : 0, $id]);
+}
+
+// --- Requirement: Get all unique tags for filter dropdown ---
+function get_all_tags() {
+    $db = get_db();
+    $stmt = $db->query("SELECT tags FROM prompts");
+    $tags = [];
+    foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $tagstr) {
+        foreach (explode(',', $tagstr) as $tag) {
+            $tag = trim($tag);
+            if ($tag) $tags[$tag] = true;
+        }
+    }
+    return array_keys($tags);
+}
+?>
+```
+
+---
+
+## 4. assets/style.css
+
+```css
+body { font-family: sans-serif; margin: 0; background: #f9f9f9; }
+header { background: #333; color: #fff; padding: 1em; }
+.container { max-width: 800px; margin: 2em auto; background: #fff; padding: 2em; border-radius: 6px; }
+input, textarea, select, button { margin: 0.5em 0; padding: 0.5em; width: 100%; }
+table { width: 100%; border-collapse: collapse; margin-top: 1em; }
+th, td { border: 1px solid #ddd; padding: 0.5em; }
+a.button, button { background: #333; color: #fff; border: none; border-radius: 3px; cursor: pointer; padding: 0.5em 1em; text-decoration: none; }
+a.button:hover, button:hover { background: #555; }
+.flex { display: flex; gap: 1em; }
+.small { font-size: 0.85em; color: #666; }
+```
+
+---
+
+## 5. login.php
+
+```php
+<?php
+// --- Requirement: Access Control via Token ---
+require_once 'functions.php';
+session_start();
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $token = trim($_POST['token']);
+    if (validate_token($token, null, true)) {
+        $_SESSION['dashboard_token'] = $token;
+        header('Location: dashboard.php');
+        exit;
+    } else {
+        $error = "Invalid token.";
+    }
+}
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <title><?= APP_NAME ?> - Login</title>
+    <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header><h1><?= APP_NAME ?></h1></header>
+<div class="container">
+    <h2>Enter Access Token</h2>
+    <?php if (!empty($error)) echo "<div style='color:red;'>$error</div>"; ?>
+    <form method="post">
+        <input type="text" name="token" placeholder="Access Token" required>
+        <button type="submit">Enter</button>
+    </form>
+    <p class="small">Need a token? <a href="token_generate.php">Generate one</a></p>
+</div>
+</body>
+</html>
+```
+
+---
+
+## 6. token_generate.php
+
+```php
+<?php
+// --- Requirement: Generate UID Access Token ---
+require_once 'functions.php';
+session_start();
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $token = generate_token();
+    store_token($token, null, true, null);
+    $generated = $token;
+}
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <title><?= APP_NAME ?> - Generate Token</title>
+    <link rel="stylesheet" href="assets/style.css">
+    <script>
+    function copyToken() {
+        var token = document.getElementById('token');
+        token.select();
+        document.execCommand('copy');
+        alert('Token copied!');
+    }
+    </script>
+</head>
+<body>
+<header><h1><?= APP_NAME ?></h1></header>
+<div class="container">
+    <h2>Generate Dashboard Access Token</h2>
+    <form method="post">
+        <button type="submit">Generate Token</button>
+    </form>
+    <?php if (!empty($generated)): ?>
+        <input id="token" value="<?= htmlspecialchars($generated) ?>" readonly>
+        <button type="button" onclick="copyToken()">Copy to Clipboard</button>
+    <?php endif; ?>
+    <p><a href="login.php">Back to Login</a></p>
+</div>
+</body>
+</html>
+```
+
+---
+
+## 7. index.php
+
+```php
+<?php
+session_start();
+if (!isset($_SESSION['dashboard_token'])) {
+    header('Location: login.php');
+    exit;
+} else {
+    header('Location: dashboard.php');
+    exit;
+}
+```
+
+---
+
+## 8. dashboard.php
+
+```php
+<?php
+// --- Requirement: Retrieve and Display All Prompts, Search, Filter, Export ---
+require_once 'functions.php';
+session_start();
+if (!isset($_SESSION['dashboard_token']) || !validate_token($_SESSION['dashboard_token'], null, true)) {
+    header('Location: login.php');
+    exit;
+}
+
+$page = max(1, intval($_GET['page'] ?? 1));
+$search = $_GET['search'] ?? '';
+$tag_filter = isset($_GET['tags']) ? explode(',', $_GET['tags']) : [];
+$favorite = isset($_GET['favorite']) ? 1 : null;
+
+$prompts = get_prompts($page, $search, $tag_filter, $favorite);
+$total = get_prompts_count($search, $tag_filter, $favorite);
+$pages = ceil($total / 5);
+$all_tags = get_all_tags();
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <title><?= APP_NAME ?> - Dashboard</title>
+    <link rel="stylesheet" href="assets/style.css">
+    <script>
+    function copyToClipboard(text) {
+        navigator.clipboard.writeText(text);
+        alert('Copied!');
+    }
+    function exportPrompts() {
+        var format = prompt('Export format: csv or json?', 'json');
+        if (format) window.location = 'prompt_export.php?format=' + encodeURIComponent(format);
+    }
+    </script>
+</head>
+<body>
+<header><h1><?= APP_NAME ?> - Dashboard</h1></header>
+<div class="container">
+    <form method="get" class="flex">
+        <input type="text" name="search" value="<?= htmlspecialchars($search) ?>" placeholder="Search...">
+        <select name="tags">
+            <option value="">All Tags</option>
+            <?php foreach ($all_tags as $tag): ?>
+                <option value="<?= htmlspecialchars($tag) ?>"<?= in_array($tag, $tag_filter) ? ' selected' : '' ?>><?= htmlspecialchars($tag) ?></option>
+            <?php endforeach; ?>
+        </select>
+        <label><input type="checkbox" name="favorite" value="1"<?= $favorite ? ' checked' : '' ?>> Favorites</label>
+        <button type="submit">Filter</button>
+        <a href="dashboard.php" class="button">Reset</a>
+    </form>
+    <div class="flex" style="justify-content: space-between;">
+        <a href="prompt_edit.php" class="button">+ New Prompt</a>
+        <button type="button" onclick="exportPrompts()">Export All</button>
+    </div>
+    <table>
+        <tr>
+            <th>Prompt</th>
+            <th>Topic</th>
+            <th>Tags</th>
+            <th>Stage</th>
+            <th>Favorite</th>
+            <th>Actions</th>
+        </tr>
+        <?php foreach ($prompts as $p): ?>
+        <tr>
+            <td><?= htmlspecialchars(substr($p['prompt'], 0, 40)) ?>...</td>
+            <td><?= htmlspecialchars($p['topic']) ?></td>
+            <td><?= htmlspecialchars($p['tags']) ?></td>
+            <td><?= htmlspecialchars($p['stage']) ?></td>
+            <td><?= $p['favorite'] ? '★' : '' ?></td>
+            <td>
+                <a href="prompt.php?id=<?= $p['id'] ?>" class="button">View</a>
+                <a href="prompt_edit.php?id=<?= $p['id'] ?>" class="button">Edit</a>
+            </td>
+        </tr>
+        <?php endforeach; ?>
+    </table>
+    <div class="flex" style="justify-content: flex-end;">
+        <?php if ($page > 1): ?>
+            <a href="?page=<?= $page-1 ?>&search=<?= urlencode($search) ?>&tags=<?= urlencode(implode(',', $tag_filter)) ?>&favorite=<?= $favorite ?>" class="button">Previous</a>
+        <?php endif; ?>
+        <?php if ($page < $pages): ?>
+            <a href="?page=<?= $page+1 ?>&search=<?= urlencode($search) ?>&tags=<?= urlencode(implode(',', $tag_filter)) ?>&favorite=<?= $favorite ?>" class="button">Next</a>
+        <?php endif; ?>
+    </div>
+    <p><a href="token_generate.php">Generate Token</a> | <a href="login.php?logout=1">Logout</a></p>
+</div>
+</body>
+</html>
+```
+
+---
+
+## 9. prompt_edit.php
+
+```php
+<?php
+// --- Requirement: Store/Edit Prompt with Metadata, Version Control ---
+require_once 'functions.php';
+session_start();
+if (!isset($_SESSION['dashboard_token']) || !validate_token($_SESSION['dashboard_token'], null, true)) {
+    header('Location: login.php');
+    exit;
+}
+
+$id = $_GET['id'] ?? null;
+$editing = false;
+if ($id) {
+    $prompt = get_prompt($id);
+    if (!$prompt) die("Prompt not found.");
+    $editing = true;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $data = [
+        'prompt' => $_POST['prompt'],
+        'description' => $_POST['description'],
+        'topic' => $_POST['topic'],
+        'tags' => $_POST['tags'],
+        'favorite' => isset($_POST['favorite']),
+        'stage' => $_POST['stage'],
+        'llm_params' => $_POST['llm_params'],
+        'is_public' => isset($_POST['is_public'])
+    ];
+    if ($editing) {
+        $change_desc = $_POST['change_desc'] ?? '';
+        update_prompt($id, $data, $change_desc);
+        header("Location: prompt.php?id=$id");
+        exit;
+    } else {
+        $new_id = add_prompt($data);
+        header("Location: prompt.php?id=$new_id");
+        exit;
+    }
+}
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <title><?= APP_NAME ?> - <?= $editing ? 'Edit' : 'New' ?> Prompt</title>
+    <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header><h1><?= APP_NAME ?> - <?= $editing ? 'Edit' : 'New' ?> Prompt</h1></header>
+<div class="container">
+    <form method="post">
+        <label>Prompt Text</label>
+        <textarea name="prompt" required><?= htmlspecialchars($prompt['prompt'] ?? '') ?></textarea>
+        <label>Description</label>
+        <input type="text" name="description" value="<?= htmlspecialchars($prompt['description'] ?? '') ?>">
+        <label>Topic</label>
+        <input type="text" name="topic" value="<?= htmlspecialchars($prompt['topic'] ?? '') ?>">
+        <label>Tags (comma-separated)</label>
+        <input type="text" name="tags" value="<?= htmlspecialchars($prompt['tags'] ?? '') ?>">
+        <label>Stage</label>
+        <select name="stage">
+            <?php foreach (['draft','review','final','archived'] as $stage): ?>
+                <option value="<?= $stage ?>"<?= ($prompt['stage'] ?? '') == $stage ? ' selected' : '' ?>><?= ucfirst($stage) ?></option>
+            <?php endforeach; ?>
+        </select>
+        <label>LLM Parameters (JSON or text)</label>
+        <textarea name="llm_params"><?= htmlspecialchars($prompt['llm_params'] ?? '') ?></textarea>
+        <label><input type="checkbox" name="favorite"<?= !empty($prompt['favorite']) ? ' checked' : '' ?>> Favorite</label>
+        <label><input type="checkbox" name="is_public"<?= !empty($prompt['is_public']) ? ' checked' : '' ?>> Public</label>
+        <?php if ($editing): ?>
+            <label>Change Description (for version control)</label>
+            <input type="text" name="change_desc" required>
+        <?php endif; ?>
+        <button type="submit"><?= $editing ? 'Save Changes' : 'Create Prompt' ?></button>
+        <a href="dashboard.php" class="button">Cancel</a>
+    </form>
+</div>
+</body>
+</html>
+```
+
+---
+
+## 10. prompt.php
+
+```php
+<?php
+// --- Requirement: View Prompt Details, Version History, Share, Favorite, Delete, Copy ---
+require_once 'functions.php';
+session_start();
+
+$id = $_GET['id'] ?? null;
+if (!$id) die("Prompt ID required.");
+$prompt = get_prompt($id);
+if (!$prompt) die("Prompt not found.");
+
+$can_edit = isset($_SESSION['dashboard_token']) && validate_token($_SESSION['dashboard_token'], null, true);
+
+$versions = get_prompt_versions($id);
+$selected_version = null;
+if (isset($_GET['version_id'])) {
+    $selected_version = get_prompt_version($_GET['version_id']);
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_edit) {
+    // Toggle favorite
+    if (isset($_POST['toggle_favorite'])) {
+        toggle_favorite($id, !$prompt['favorite']);
+        header("Location: prompt.php?id=$id");
+        exit;
+    }
+    // Share/unshare
+    if (isset($_POST['toggle_public'])) {
+        set_public($id, !$prompt['is_public']);
+        header("Location: prompt.php?id=$id");
+        exit;
+    }
+}
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <title><?= APP_NAME ?> - Prompt Details</title>
+    <link rel="stylesheet" href="assets/style.css">
+    <script>
+    function copyToClipboard(text) {
+        navigator.clipboard.writeText(text);
+        alert('Copied!');
+    }
+    </script>
+</head>
+<body>
+<header><h1><?= APP_NAME ?> - Prompt Details</h1></header>
+<div class="container">
+    <?php if ($selected_version): ?>
+        <h3>Viewing Version <?= $selected_version['version'] ?></h3>
+        <pre><?= htmlspecialchars($selected_version['prompt']) ?></pre>
+        <p><strong>Description:</strong> <?= htmlspecialchars($selected_version['description']) ?></p>
+        <p><strong>Change:</strong> <?= htmlspecialchars($selected_version['change_desc']) ?></p>
+        <a href="prompt.php?id=<?= $id ?>" class="button">Back to Current</a>
+    <?php else: ?>
+        <h2><?= htmlspecialchars($prompt['description']) ?></h2>
+        <pre id="promptText"><?= htmlspecialchars($prompt['prompt']) ?></pre>
+        <button onclick="copyToClipboard(document.getElementById('promptText').innerText)">Copy Prompt</button>
+        <p><strong>Topic:</strong> <?= htmlspecialchars($prompt['topic']) ?></p>
+        <p><strong>Tags:</strong> <?= htmlspecialchars($prompt['tags']) ?></p>
+        <p><strong>Stage:</strong> <?= htmlspecialchars($prompt['stage']) ?></p>
+        <p><strong>LLM Params:</strong> <code><?= htmlspecialchars($prompt['llm_params']) ?></code></p>
+        <p><strong>Favorite:</strong> <?= $prompt['favorite'] ? '★' : '' ?></p>
+        <p><strong>Public:</strong> <?= $prompt['is_public'] ? 'Yes' : 'No' ?></p>
+        <form method="post" style="display:inline;">
+            <?php if ($can_edit): ?>
+                <button name="toggle_favorite"><?= $prompt['favorite'] ? 'Unfavorite' : 'Favorite' ?></button>
+                <button name="toggle_public"><?= $prompt['is_public'] ? 'Unshare' : 'Share Publicly' ?></button>
+            <?php endif; ?>
+        </form>
+        <div class="flex">
+            <?php if ($can_edit): ?>
+                <a href="prompt_edit.php?id=<?= $id ?>" class="button">Edit</a>
+                <a href="prompt_delete.php?id=<?= $id ?>" class="button" onclick="return confirm('Delete this prompt?')">Delete</a>
+            <?php endif; ?>
+            <a href="prompt_export.php?id=<?= $id ?>&format=json" class="button">Export JSON</a>
+            <a href="prompt_export.php?id=<?= $id ?>&format=csv" class="button">Export CSV</a>
+        </div>
+        <h3>Shareable URLs</h3>
+        <input value="<?= $_SERVER['REQUEST_SCHEME'].'://'.$_SERVER['HTTP_HOST'].'/prompt_share.php?id='.$id.($prompt['is_public'] ? '' : '&token='.($_SESSION['dashboard_token'] ?? '')) ?>" readonly id="shareUrl">
+        <button onclick="copyToClipboard(document.getElementById('shareUrl').value)">Copy URL</button>
+        <h3>Version History</h3>
+        <ul>
+            <?php foreach ($versions as $v): ?>
+                <li>
+                    <a href="prompt.php?id=<?= $id ?>&version_id=<?= $v['id'] ?>">Version <?= $v['version'] ?></a>
+                    (<?= htmlspecialchars($v['change_desc']) ?>)
+                </li>
+            <?php endforeach; ?>
+        </ul>
+    <?php endif; ?>
+    <a href="dashboard.php" class="button">Back to Dashboard</a>
+</div>
+</body>
+</html>
+```
+
+---
+
+## 11. prompt_delete.php
+
+```php
+<?php
+// --- Requirement: Delete Prompt ---
+require_once 'functions.php';
+session_start();
+if (!isset($_SESSION['dashboard_token']) || !validate_token($_SESSION['dashboard_token'], null, true)) {
+    header('Location: login.php');
+    exit;
+}
+
+$id = $_GET['id'] ?? null;
+if (!$id) die("Prompt ID required.");
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (isset($_POST['confirm'])) {
+        delete_prompt($id);
+        header('Location: dashboard.php');
+        exit;
+    } else {
+        header("Location: prompt.php?id=$id");
+        exit;
+    }
+}
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <title><?= APP_NAME ?> - Delete Prompt</title>
+    <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header><h1><?= APP_NAME ?> - Delete Prompt</h1></header>
+<div class="container">
+    <form method="post">
+        <p>Are you sure you want to delete this prompt?</p>
+        <button name="confirm" value="1">Yes, Delete</button>
+        <button name="cancel" value="1">Cancel</button>
+    </form>
+</div>
+</body>
+</html>
+```
+
+---
+
+## 12. prompt_share.php
+
+```php
+<?php
+// --- Requirement: Retrieve Prompts via URL with Access Token, Public Sharing ---
+require_once 'functions.php';
+
+$id = $_GET['id'] ?? null;
+$token = $_GET['token'] ?? null;
+if (!$id) die("Prompt ID required.");
+
+$prompt = get_prompt($id);
+if (!$prompt) die("Prompt not found.");
+
+if (!$prompt['is_public']) {
+    if (!$token || !validate_token($token, $id)) {
+        die("Access denied.");
+    }
+}
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Prompt Share - <?= APP_NAME ?></title>
+    <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="container">
+    <h2><?= htmlspecialchars($prompt['description']) ?></h2>
+    <pre><?= htmlspecialchars($prompt['prompt']) ?></pre>
+    <p><strong>Topic:</strong> <?= htmlspecialchars($prompt['topic']) ?></p>
+    <p><strong>Tags:</strong> <?= htmlspecialchars($prompt['tags']) ?></p>
+    <p><strong>Stage:</strong> <?= htmlspecialchars($prompt['stage']) ?></p>
+    <p><strong>LLM Params:</strong> <code><?= htmlspecialchars($prompt['llm_params']) ?></code></p>
+</div>
+</body>
+</html>
+```
+
+---
+
+## 13. prompt_api.php
+
+```php
+<?php
+// --- Requirement: Retrieve Prompt as Raw Data via URL, Add Prompts via URL ---
+require_once 'functions.php';
+
+header('Content-Type: application/json');
+
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    // Raw prompt API
+    $id = $_GET['id'] ?? null;
+    $token = $_GET['token'] ?? null;
+    if (!$id || !$token) { http_response_code(400); echo json_encode(['error'=>'Missing id or token']); exit; }
+    if (!validate_token($token, $id)) { http_response_code(403); echo json_encode(['error'=>'Forbidden']); exit; }
+    $prompt = get_prompt($id);
+    if (!$prompt) { http_response_code(404); echo json_encode(['error'=>'Not found']); exit; }
+    echo json_encode($prompt);
+    exit;
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Add prompt via API
+    $token = $_POST['token'] ?? null;
+    if (!$token || !validate_token($token, null, true)) { http_response_code(403); echo json_encode(['error'=>'Forbidden']); exit; }
+    $fields = ['prompt','description','topic','tags','favorite','stage','llm_params','is_public'];
+    $data = [];
+    foreach ($fields as $f) $data[$f] = $_POST[$f] ?? '';
+    $id = add_prompt($data);
+    http_response_code(201);
+    echo json_encode(['id'=>$id]);
+    exit;
+} else {
+    http_response_code(405);
+    echo json_encode(['error'=>'Method not allowed']);
+    exit;
+}
+```
+
+---
+
+## 14. prompt_export.php
+
+```php
+<?php
+// --- Requirement: Export Prompts (CSV/JSON) ---
+require_once 'functions.php';
+session_start();
+if (!isset($_SESSION['dashboard_token']) || !validate_token($_SESSION['dashboard_token'], null, true)) {
+    die("Access denied.");
+}
+
+$format = $_GET['format'] ?? 'json';
+$id = $_GET['id'] ?? null;
+
+if ($id) {
+    $prompts = [get_prompt($id)];
+} else {
+    $prompts = get_prompts(1, '', [], null);
+    // For all prompts, get all (not just page 1)
+    $db = get_db();
+    $stmt = $db->query("SELECT * FROM prompts");
+    $prompts = $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+if ($format === 'csv') {
+    header('Content-Type: text/csv');
+    header('Content-Disposition: attachment; filename="prompts.csv"');
+    $out = fopen('php://output', 'w');
+    fputcsv($out, array_keys($prompts[0]));
+    foreach ($prompts as $row) fputcsv($out, $row);
+    fclose($out);
+    exit;
+} else {
+    header('Content-Type: application/json');
+    header('Content-Disposition: attachment; filename="prompts.json"');
+    echo json_encode($prompts);
+    exit;
+}
+```
+
+---
+
+# Usage Summary
+
+**Next Prompt Manager** is a minimal prompt management tool for storing, editing, versioning, sharing, and exporting prompts.
+
+### How to Use
+
+1. **Login:**  
+   - Go to `login.php` and enter a valid dashboard access token.
+   - If you need a token, generate one at `token_generate.php`.
+
+2. **Dashboard:**  
+   - View, search, filter, and paginate prompts.
+   - Create new prompts or edit existing ones.
+   - Export all prompts as CSV or JSON.
+
+3. **Prompt Details:**  
+   - View all metadata, copy prompt to clipboard, toggle favorite/public status, see version history, export, or delete.
+
+4. **Version Control:**  
+   - Each edit requires a change description and creates a new version.
+   - View and select older versions from the version history.
+
+5. **Sharing:**  
+   - Share prompts via a public URL (if marked public) or with a unique access token.
+
+6. **API:**  
+   - Retrieve a prompt as raw JSON via `prompt_api.php?id=...&token=...`.
+   - Add a prompt via POST to `prompt_api.php` with all fields and a valid dashboard token.
+
+7. **Access Control:**  
+   - All main features require a valid dashboard token.
+   - Public prompts can be accessed without a token.
+
+---
+
+**This implementation covers all requirements as described in your JSON and SQL specification.**  
+You can further enhance the UI or security as needed!

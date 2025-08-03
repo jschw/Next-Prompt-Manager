@@ -1,0 +1,193 @@
+```json
+[
+  {
+    "requirement_name": "Store Prompts with Metadata",
+    "functional_description": "Allows users to save prompts with associated metadata (description, topic, tags, favorite flag, stage, LLM parameters) into a MySQL database.",
+    "ui_elements": [
+      "Prompt editor page with:",
+      "Text input for prompt",
+      "Input fields for description, topic, tags, stage (dropdown), LLM parameters (text area)",
+      "Save/Submit button"
+    ],
+    "implementation_description": "onSubmitPromptForm():\n    data = collectFormFields()\n    INSERT INTO prompts (prompt, description, topic, tags, favorite, stage, llm_params)\n        VALUES (data.prompt, data.description, data.topic, data.tags, data.favorite, data.stage, data.llm_params)"
+  },
+  {
+    "requirement_name": "Retrieve and Display All Prompts",
+    "functional_description": "Fetches all stored prompts from the database and displays them in the dashboard, paginated in sets of 5.",
+    "ui_elements": [
+      "Overview/Dashboard page",
+      "List/table/grid view of prompts (showing 5 at a time)",
+      "Pagination controls (next/previous page)",
+      "Edit button for each prompt",
+      "Show full prompt/details button for each prompt"
+    ],
+    "implementation_description": "onDashboardLoad(page):\n    prompts = SELECT * FROM prompts LIMIT 5 OFFSET (page-1)*5\n    renderPromptList(prompts)"
+  },
+  {
+    "requirement_name": "Version Control for Prompts",
+    "functional_description": "Tracks and stores version numbers for each prompt. Each change increments the version and stores a snapshot with a change description.",
+    "ui_elements": [
+      "Prompt editor page:",
+      "Input field for version change description (appears when editing)",
+      "Version history page/modal:",
+      "List of all versions with version numbers and change descriptions",
+      "Select/view specific version button"
+    ],
+    "implementation_description": "onPromptEditSubmit():\n    oldPrompt = SELECT * FROM prompts WHERE id = promptId\n    INSERT INTO prompt_versions (prompt_id, version, data, change_desc)\n        VALUES (promptId, oldPrompt.version+1, newData, changeDesc)\n    UPDATE prompts SET ... , version = oldPrompt.version+1 WHERE id = promptId"
+  },
+  {
+    "requirement_name": "Retrieve Prompts via URL with Access Token",
+    "functional_description": "Allows prompts to be accessed directly via a URL containing the prompt ID and a unique access token.",
+    "ui_elements": [
+      "None required in UI for retrieval (handled via URL), but:",
+      "Share dialog/modal on prompt display page showing the access URL in a text field",
+      "Copy URL to clipboard button"
+    ],
+    "implementation_description": "onPromptURLAccess(promptId, token):\n    if validateToken(promptId, token):\n        prompt = SELECT * FROM prompts WHERE id = promptId\n        renderPrompt(prompt)\n    else:\n        showAccessDenied()"
+  },
+  {
+    "requirement_name": "Retrieve Prompt as Raw Data via URL",
+    "functional_description": "Enables fetching just the prompt data (no UI) via a special URL (e.g., for API access).",
+    "ui_elements": [
+      "None (backend/API feature)"
+    ],
+    "implementation_description": "onRawPromptAPIRequest(promptId, token):\n    if validateToken(promptId, token):\n        prompt = SELECT * FROM prompts WHERE id = promptId\n        return JSON(prompt)\n    else:\n        return 403"
+  },
+  {
+    "requirement_name": "Add Prompts via URL",
+    "functional_description": "Allows new prompts to be added by sending all required info as URL parameters (no UI).",
+    "ui_elements": [
+      "None (backend/API feature)"
+    ],
+    "implementation_description": "onAddPromptAPIRequest(params):\n    if validateToken(params.token):\n        INSERT INTO prompts (prompt, description, topic, tags, ...) VALUES (...)\n        return 201\n    else:\n        return 403"
+  },
+  {
+    "requirement_name": "Public Sharing of Prompts",
+    "functional_description": "Prompts can be marked as public, allowing access via URL without a token.",
+    "ui_elements": [
+      "Share/unshare button on prompt display page",
+      "Text field showing public URL (when shared)",
+      "Copy URL to clipboard button"
+    ],
+    "implementation_description": "onShareToggle(promptId, publicStatus):\n    UPDATE prompts SET is_public = publicStatus WHERE id = promptId"
+  },
+  {
+    "requirement_name": "Fulltext Search",
+    "functional_description": "Allows users to search for prompts using a search field, filtering results in real time.",
+    "ui_elements": [
+      "Search input field on dashboard/overview page"
+    ],
+    "implementation_description": "onSearchInput(query):\n    prompts = SELECT * FROM prompts WHERE MATCH(prompt, description, tags) AGAINST (query)\n    renderPromptList(prompts)"
+  },
+  {
+    "requirement_name": "Filter by Tag",
+    "functional_description": "Enables filtering of prompts by selected tags.",
+    "ui_elements": [
+      "Tag filter dropdown/multi-select on dashboard/overview page"
+    ],
+    "implementation_description": "onTagFilterChange(selectedTags):\n    prompts = SELECT * FROM prompts WHERE tags IN (selectedTags)\n    renderPromptList(prompts)"
+  },
+  {
+    "requirement_name": "Filter by Favorite",
+    "functional_description": "Allows users to display only prompts marked as favorite.",
+    "ui_elements": [
+      "Favorite filter toggle/button on dashboard/overview page"
+    ],
+    "implementation_description": "onFavoriteFilterToggle():\n    prompts = SELECT * FROM prompts WHERE favorite = true\n    renderPromptList(prompts)"
+  },
+  {
+    "requirement_name": "Export Prompts",
+    "functional_description": "Allows exporting of one or all prompts in CSV or JSON format, with download capability.",
+    "ui_elements": [
+      "Export button on dashboard (for all prompts)",
+      "Export button on prompt display page (for single prompt)",
+      "Modal/dialog to choose format (CSV/JSON)",
+      "Download file link/button"
+    ],
+    "implementation_description": "onExportRequest(format, promptIds):\n    prompts = SELECT * FROM prompts WHERE id IN (promptIds)\n    file = convertToFormat(prompts, format)\n    triggerDownload(file)"
+  },
+  {
+    "requirement_name": "Generate UID Access Token",
+    "functional_description": "Generates a random UID token for dashboard or prompt access.",
+    "ui_elements": [
+      "Button to generate token",
+      "Text field displaying generated token",
+      "Copy token to clipboard button"
+    ],
+    "implementation_description": "onGenerateToken():\n    token = generateRandomUID()\n    storeToken(token)\n    displayToken(token)"
+  },
+  {
+    "requirement_name": "Access Control via Token",
+    "functional_description": "Requires users to enter a valid access token to access the dashboard or prompt views.",
+    "ui_elements": [
+      "Login/access page:",
+      "Token input field",
+      "Submit/Enter button"
+    ],
+    "implementation_description": "onTokenSubmit(token):\n    if tokenExists(token):\n        grantAccess()\n    else:\n        showAccessDenied()"
+  },
+  {
+    "requirement_name": "Edit Prompt",
+    "functional_description": "Allows editing of existing prompts and their metadata.",
+    "ui_elements": [
+      "Edit button on dashboard/overview page (opens prompt editor)",
+      "Prompt editor page with pre-filled fields"
+    ],
+    "implementation_description": "onEditPrompt(promptId, newData):\n    UPDATE prompts SET ... WHERE id = promptId\n    (also see version control pseudocode)"
+  },
+  {
+    "requirement_name": "View Prompt Details",
+    "functional_description": "Displays all information for a single prompt, including metadata and version history.",
+    "ui_elements": [
+      "Prompt display page",
+      "All metadata fields in read-only mode",
+      "Version history button"
+    ],
+    "implementation_description": "onViewPrompt(promptId):\n    prompt = SELECT * FROM prompts WHERE id = promptId\n    versions = SELECT * FROM prompt_versions WHERE prompt_id = promptId\n    renderPromptDetails(prompt, versions)"
+  },
+  {
+    "requirement_name": "Copy Prompt to Clipboard",
+    "functional_description": "Allows users to copy the prompt text to the clipboard.",
+    "ui_elements": [
+      "Copy to clipboard button on prompt display page"
+    ],
+    "implementation_description": "onCopyPromptClick(promptText):\n    copyToClipboard(promptText)\n    showCopiedMessage()"
+  },
+  {
+    "requirement_name": "Delete Prompt",
+    "functional_description": "Allows deletion of a prompt, with user confirmation.",
+    "ui_elements": [
+      "Delete button on prompt display page",
+      "Confirmation dialog/modal"
+    ],
+    "implementation_description": "onDeletePrompt(promptId):\n    if confirmDelete():\n        DELETE FROM prompts WHERE id = promptId"
+  },
+  {
+    "requirement_name": "Select and View Older Prompt Versions",
+    "functional_description": "Allows users to select and view previous versions of a prompt.",
+    "ui_elements": [
+      "Version selection dropdown/list on prompt display page",
+      "Display area for selected version"
+    ],
+    "implementation_description": "onVersionSelect(versionId):\n    version = SELECT * FROM prompt_versions WHERE id = versionId\n    renderPromptVersion(version)"
+  },
+  {
+    "requirement_name": "Toggle Favorite Flag",
+    "functional_description": "Allows marking/unmarking a prompt as favorite.",
+    "ui_elements": [
+      "Favorite toggle button on prompt display page"
+    ],
+    "implementation_description": "onFavoriteToggle(promptId, isFavorite):\n    UPDATE prompts SET favorite = isFavorite WHERE id = promptId"
+  },
+  {
+    "requirement_name": "Share/Unshare Prompt",
+    "functional_description": "Allows toggling the public sharing status of a prompt and copying the shareable URL.",
+    "ui_elements": [
+      "Share/unshare button on prompt display page",
+      "Text field with shareable URL (when shared)",
+      "Copy URL to clipboard button"
+    ],
+    "implementation_description": "onShareStatusChange(promptId, isShared):\n    UPDATE prompts SET is_public = isShared WHERE id = promptId\n    if isShared:\n        displayPublicURL(promptId)"
+  }
+]
+```

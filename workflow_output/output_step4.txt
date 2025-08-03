@@ -1,0 +1,76 @@
+```sql
+-- Table: prompts
+CREATE TABLE prompts (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    prompt TEXT NOT NULL,
+    description VARCHAR(1024),
+    topic VARCHAR(255),
+    tags VARCHAR(512), -- Comma-separated list or consider a separate tags table for normalization
+    favorite BOOLEAN DEFAULT FALSE,
+    stage ENUM('draft', 'review', 'final', 'archived') DEFAULT 'draft',
+    llm_params TEXT, -- JSON or string representation of LLM parameters
+    version INT DEFAULT 1,
+    is_public BOOLEAN DEFAULT FALSE,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+-- Table: prompt_versions
+CREATE TABLE prompt_versions (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    prompt_id INT NOT NULL,
+    version INT NOT NULL,
+    prompt TEXT NOT NULL,
+    description VARCHAR(1024),
+    topic VARCHAR(255),
+    tags VARCHAR(512),
+    favorite BOOLEAN,
+    stage ENUM('draft', 'review', 'final', 'archived'),
+    llm_params TEXT,
+    change_desc VARCHAR(1024),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (prompt_id) REFERENCES prompts(id) ON DELETE CASCADE
+);
+
+-- Table: access_tokens
+CREATE TABLE access_tokens (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    token CHAR(64) NOT NULL UNIQUE,
+    prompt_id INT, -- NULL if token is for dashboard/global access
+    is_dashboard_token BOOLEAN DEFAULT FALSE,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME, -- NULL for non-expiring tokens
+    FOREIGN KEY (prompt_id) REFERENCES prompts(id) ON DELETE CASCADE
+);
+
+-- (Optional) Table: tags
+-- If you want normalized tags instead of comma-separated in prompts
+CREATE TABLE tags (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(64) NOT NULL UNIQUE
+);
+
+CREATE TABLE prompt_tags (
+    prompt_id INT NOT NULL,
+    tag_id INT NOT NULL,
+    PRIMARY KEY (prompt_id, tag_id),
+    FOREIGN KEY (prompt_id) REFERENCES prompts(id) ON DELETE CASCADE,
+    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+);
+
+-- Indexes for fulltext search (MySQL 5.6+)
+ALTER TABLE prompts ADD FULLTEXT INDEX ft_prompt_desc_tags (prompt, description, tags);
+
+-- Notes:
+-- - The 'prompt_versions' table stores snapshots for version control.
+-- - The 'access_tokens' table allows both per-prompt and global/dashboard tokens.
+-- - The 'tags' and 'prompt_tags' tables are optional if you want normalized tag management.
+-- - The 'llm_params' field can be JSON if using MySQL 5.7+.
+```
+
+**Short Notes:**
+- `prompts` holds the main prompt and all metadata.
+- `prompt_versions` stores each version of a prompt, including change descriptions.
+- `access_tokens` handles both per-prompt and dashboard access tokens.
+- `tags` and `prompt_tags` are optional for normalized tag storage; otherwise, use the `tags` field in `prompts`.
+- Fulltext index enables efficient search.

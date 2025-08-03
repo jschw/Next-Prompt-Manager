@@ -1,0 +1,1 @@
+INSERT INTO access_tokens (token, prompt_id, is_dashboard_token, expires_at) VALUES (3141593, null, 1, null)

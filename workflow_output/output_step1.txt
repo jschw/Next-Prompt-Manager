@@ -1,0 +1,194 @@
+Certainly! Here is a structured breakdown of each unique requirement, with the required UI elements mapped for each:
+
+---
+
+### 1. Requirement name: Store Prompts with Metadata  
+**Functional Description:**  
+Allows users to save prompts with associated metadata (description, topic, tags, favorite flag, stage, LLM parameters) into a MySQL database.  
+**UI Elements:**  
+- Prompt editor page with:
+  - Text input for prompt
+  - Input fields for description, topic, tags, stage (dropdown), LLM parameters (text area)
+  - Save/Submit button
+
+---
+
+### 2. Requirement name: Retrieve and Display All Prompts  
+**Functional Description:**  
+Fetches all stored prompts from the database and displays them in the dashboard, paginated in sets of 5.  
+**UI Elements:**  
+- Overview/Dashboard page
+  - List/table/grid view of prompts (showing 5 at a time)
+  - Pagination controls (next/previous page)
+  - Edit button for each prompt
+  - Show full prompt/details button for each prompt
+
+---
+
+### 3. Requirement name: Version Control for Prompts  
+**Functional Description:**  
+Tracks and stores version numbers for each prompt. Each change increments the version and stores a snapshot with a change description.  
+**UI Elements:**  
+- Prompt editor page:
+  - Input field for version change description (appears when editing)
+- Version history page/modal:
+  - List of all versions with version numbers and change descriptions
+  - Select/view specific version button
+
+---
+
+### 4. Requirement name: Retrieve Prompts via URL with Access Token  
+**Functional Description:**  
+Allows prompts to be accessed directly via a URL containing the prompt ID and a unique access token.  
+**UI Elements:**  
+- None required in UI for retrieval (handled via URL), but:
+  - Share dialog/modal on prompt display page showing the access URL in a text field
+  - Copy URL to clipboard button
+
+---
+
+### 5. Requirement name: Retrieve Prompt as Raw Data via URL  
+**Functional Description:**  
+Enables fetching just the prompt data (no UI) via a special URL (e.g., for API access).  
+**UI Elements:**  
+- None (backend/API feature)
+
+---
+
+### 6. Requirement name: Add Prompts via URL  
+**Functional Description:**  
+Allows new prompts to be added by sending all required info as URL parameters (no UI).  
+**UI Elements:**  
+- None (backend/API feature)
+
+---
+
+### 7. Requirement name: Public Sharing of Prompts  
+**Functional Description:**  
+Prompts can be marked as public, allowing access via URL without a token.  
+**UI Elements:**  
+- Share/unshare button on prompt display page
+- Text field showing public URL (when shared)
+- Copy URL to clipboard button
+
+---
+
+### 8. Requirement name: Fulltext Search  
+**Functional Description:**  
+Allows users to search for prompts using a search field, filtering results in real time.  
+**UI Elements:**  
+- Search input field on dashboard/overview page
+
+---
+
+### 9. Requirement name: Filter by Tag  
+**Functional Description:**  
+Enables filtering of prompts by selected tags.  
+**UI Elements:**  
+- Tag filter dropdown/multi-select on dashboard/overview page
+
+---
+
+### 10. Requirement name: Filter by Favorite  
+**Functional Description:**  
+Allows users to display only prompts marked as favorite.  
+**UI Elements:**  
+- Favorite filter toggle/button on dashboard/overview page
+
+---
+
+### 11. Requirement name: Export Prompts  
+**Functional Description:**  
+Allows exporting of one or all prompts in CSV or JSON format, with download capability.  
+**UI Elements:**  
+- Export button on dashboard (for all prompts)
+- Export button on prompt display page (for single prompt)
+- Modal/dialog to choose format (CSV/JSON)
+- Download file link/button
+
+---
+
+### 12. Requirement name: Generate UID Access Token  
+**Functional Description:**  
+Generates a random UID token for dashboard or prompt access.  
+**UI Elements:**  
+- Button to generate token
+- Text field displaying generated token
+- Copy token to clipboard button
+
+---
+
+### 13. Requirement name: Access Control via Token  
+**Functional Description:**  
+Requires users to enter a valid access token to access the dashboard or prompt views.  
+**UI Elements:**  
+- Login/access page:
+  - Token input field
+  - Submit/Enter button
+
+---
+
+### 14. Requirement name: Edit Prompt  
+**Functional Description:**  
+Allows editing of existing prompts and their metadata.  
+**UI Elements:**  
+- Edit button on dashboard/overview page (opens prompt editor)
+- Prompt editor page with pre-filled fields
+
+---
+
+### 15. Requirement name: View Prompt Details  
+**Functional Description:**  
+Displays all information for a single prompt, including metadata and version history.  
+**UI Elements:**  
+- Prompt display page
+  - All metadata fields in read-only mode
+  - Version history button
+
+---
+
+### 16. Requirement name: Copy Prompt to Clipboard  
+**Functional Description:**  
+Allows users to copy the prompt text to the clipboard.  
+**UI Elements:**  
+- Copy to clipboard button on prompt display page
+
+---
+
+### 17. Requirement name: Delete Prompt  
+**Functional Description:**  
+Allows deletion of a prompt, with user confirmation.  
+**UI Elements:**  
+- Delete button on prompt display page
+- Confirmation dialog/modal
+
+---
+
+### 18. Requirement name: Select and View Older Prompt Versions  
+**Functional Description:**  
+Allows users to select and view previous versions of a prompt.  
+**UI Elements:**  
+- Version selection dropdown/list on prompt display page
+- Display area for selected version
+
+---
+
+### 19. Requirement name: Toggle Favorite Flag  
+**Functional Description:**  
+Allows marking/unmarking a prompt as favorite.  
+**UI Elements:**  
+- Favorite toggle button on prompt display page
+
+---
+
+### 20. Requirement name: Share/Unshare Prompt  
+**Functional Description:**  
+Allows toggling the public sharing status of a prompt and copying the shareable URL.  
+**UI Elements:**  
+- Share/unshare button on prompt display page
+- Text field with shareable URL (when shared)
+- Copy URL to clipboard button
+
+---
+
+This list covers each unique requirement and the necessary UI elements for implementation. If you need a more visual mapping (e.g., per page/screen), let me know!

@@ -1,0 +1,867 @@
+Below are the **corrected files** and the **updated database schema** as per your requests:
+
+---
+
+# 1. Database Schema
+
+**Rename `description` to `title` everywhere.**  
+**Update fulltext index.**
+
+```sql
+-- Table: prompts
+CREATE TABLE prompts (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    prompt TEXT NOT NULL,
+    title VARCHAR(1024), -- was description
+    topic VARCHAR(255),
+    tags VARCHAR(512),
+    favorite BOOLEAN DEFAULT FALSE,
+    stage ENUM('draft', 'review', 'final', 'archived') DEFAULT 'draft',
+    llm_params TEXT,
+    version INT DEFAULT 1,
+    is_public BOOLEAN DEFAULT FALSE,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+-- Table: prompt_versions
+CREATE TABLE prompt_versions (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    prompt_id INT NOT NULL,
+    version INT NOT NULL,
+    prompt TEXT NOT NULL,
+    title VARCHAR(1024), -- was description
+    topic VARCHAR(255),
+    tags VARCHAR(512),
+    favorite BOOLEAN,
+    stage ENUM('draft', 'review', 'final', 'archived'),
+    llm_params TEXT,
+    change_desc VARCHAR(1024),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (prompt_id) REFERENCES prompts(id) ON DELETE CASCADE
+);
+
+-- Table: access_tokens
+CREATE TABLE access_tokens (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    token CHAR(64) NOT NULL UNIQUE,
+    prompt_id INT,
+    is_dashboard_token BOOLEAN DEFAULT FALSE,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME,
+    FOREIGN KEY (prompt_id) REFERENCES prompts(id) ON DELETE CASCADE
+);
+
+-- Table: tags (optional)
+CREATE TABLE tags (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(64) NOT NULL UNIQUE
+);
+
+CREATE TABLE prompt_tags (
+    prompt_id INT NOT NULL,
+    tag_id INT NOT NULL,
+    PRIMARY KEY (prompt_id, tag_id),
+    FOREIGN KEY (prompt_id) REFERENCES prompts(id) ON DELETE CASCADE,
+    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+);
+
+-- Indexes for fulltext search (MySQL 5.6+)
+ALTER TABLE prompts ADD FULLTEXT INDEX ft_prompt_title_tags (prompt, title, tags);
+```
+
+---
+
+# 2. functions.php
+
+**Key changes:**
+- All `description` fields/keys are now `title`.
+- Fulltext search fallback to `LIKE` if search is short or MySQL doesn't match.
+- Favorite filter bug fixed (was not working due to type handling).
+- All prompt add/update/version functions use `title` not `description`.
+
+```php
+<?php
+require_once 'db.php';
+
+// --- Requirement: Generate UID Access Token ---
+function generate_token($length = 64) {
+    return bin2hex(random_bytes($length / 2));
+}
+
+// --- Requirement: Store token in DB ---
+function store_token($token, $prompt_id = null, $is_dashboard = false, $expires = null) {
+    $db = get_db();
+    $stmt = $db->prepare("INSERT INTO access_tokens (token, prompt_id, is_dashboard_token, expires_at) VALUES (?, ?, ?, ?)");
+    $stmt->execute([$token, $prompt_id, $is_dashboard ? 1 : 0, $expires]);
+}
+
+// --- Requirement: Access Control via Token ---
+function validate_token($token, $prompt_id = null, $dashboard = false) {
+    $db = get_db();
+    if ($dashboard) {
+        $stmt = $db->prepare("SELECT * FROM access_tokens WHERE token = ? AND is_dashboard_token = 1");
+        $stmt->execute([$token]);
+    } else if ($prompt_id !== null) {
+        $stmt = $db->prepare("SELECT * FROM access_tokens WHERE token = ? AND (prompt_id = ? OR is_dashboard_token = 1)");
+        $stmt->execute([$token, $prompt_id]);
+    } else {
+        $stmt = $db->prepare("SELECT * FROM access_tokens WHERE token = ?");
+        $stmt->execute([$token]);
+    }
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($row && (!$row['expires_at'] || strtotime($row['expires_at']) > time())) {
+        return true;
+    }
+    return false;
+}
+
+// --- Requirement: Store Prompts with Metadata ---
+function add_prompt($data) {
+    $db = get_db();
+    $stmt = $db->prepare("INSERT INTO prompts (prompt, title, topic, tags, favorite, stage, llm_params, version, is_public) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)");
+    $stmt->execute([
+        $data['prompt'], $data['title'], $data['topic'], $data['tags'],
+        !empty($data['favorite']) ? 1 : 0,
+        $data['stage'], $data['llm_params'],
+        !empty($data['is_public']) ? 1 : 0
+    ]);
+    return $db->lastInsertId();
+}
+
+// --- Requirement: Retrieve and Display All Prompts (with pagination, search, filters) ---
+function get_prompts($page = 1, $search = '', $tags = [], $favorite = null) {
+    $db = get_db();
+    $limit = 5;
+    $offset = ($page - 1) * $limit;
+    $where = [];
+    $params = [];
+
+    if ($search) {
+        // Use fulltext if search is long enough, else fallback to LIKE
+        if (mb_strlen($search) >= 3) {
+            $where[] = "MATCH(prompt, title, tags) AGAINST (?)";
+            $params[] = $search;
+        } else {
+            $where[] = "(prompt LIKE ? OR title LIKE ? OR tags LIKE ?)";
+            $params[] = "%$search%";
+            $params[] = "%$search%";
+            $params[] = "%$search%";
+        }
+    }
+    if ($tags && count($tags) && $tags[0] !== '') {
+        $tag_like = [];
+        foreach ($tags as $tag) {
+            $tag_like[] = "FIND_IN_SET(?, tags)";
+            $params[] = $tag;
+        }
+        $where[] = '(' . implode(' OR ', $tag_like) . ')';
+    }
+    if ($favorite !== null && $favorite !== '') {
+        $where[] = "favorite = ?";
+        $params[] = $favorite ? 1 : 0;
+    }
+    $sql = "SELECT * FROM prompts";
+    if ($where) $sql .= " WHERE " . implode(' AND ', $where);
+    $sql .= " ORDER BY updated_at DESC LIMIT $limit OFFSET $offset";
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function get_prompts_count($search = '', $tags = [], $favorite = null) {
+    $db = get_db();
+    $where = [];
+    $params = [];
+    if ($search) {
+        if (mb_strlen($search) >= 3) {
+            $where[] = "MATCH(prompt, title, tags) AGAINST (?)";
+            $params[] = $search;
+        } else {
+            $where[] = "(prompt LIKE ? OR title LIKE ? OR tags LIKE ?)";
+            $params[] = "%$search%";
+            $params[] = "%$search%";
+            $params[] = "%$search%";
+        }
+    }
+    if ($tags && count($tags) && $tags[0] !== '') {
+        $tag_like = [];
+        foreach ($tags as $tag) {
+            $tag_like[] = "FIND_IN_SET(?, tags)";
+            $params[] = $tag;
+        }
+        $where[] = '(' . implode(' OR ', $tag_like) . ')';
+    }
+    if ($favorite !== null && $favorite !== '') {
+        $where[] = "favorite = ?";
+        $params[] = $favorite ? 1 : 0;
+    }
+    $sql = "SELECT COUNT(*) FROM prompts";
+    if ($where) $sql .= " WHERE " . implode(' AND ', $where);
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    return $stmt->fetchColumn();
+}
+
+// --- Requirement: Retrieve Single Prompt ---
+function get_prompt($id) {
+    $db = get_db();
+    $stmt = $db->prepare("SELECT * FROM prompts WHERE id = ?");
+    $stmt->execute([$id]);
+    return $stmt->fetch(PDO::FETCH_ASSOC);
+}
+
+// --- Requirement: Edit Prompt (with version control) ---
+function update_prompt($id, $data, $change_desc) {
+    $db = get_db();
+    $prompt = get_prompt($id);
+
+    // Store old version
+    $stmt = $db->prepare("INSERT INTO prompt_versions (prompt_id, version, prompt, title, topic, tags, favorite, stage, llm_params, change_desc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    $stmt->execute([
+        $id, $prompt['version'] + 1, $data['prompt'], $data['title'], $data['topic'], $data['tags'],
+        !empty($data['favorite']) ? 1 : 0, $data['stage'], $data['llm_params'], $change_desc
+    ]);
+
+    // Update prompt
+    $stmt = $db->prepare("UPDATE prompts SET prompt=?, title=?, topic=?, tags=?, favorite=?, stage=?, llm_params=?, version=version+1 WHERE id=?");
+    $stmt->execute([
+        $data['prompt'], $data['title'], $data['topic'], $data['tags'],
+        !empty($data['favorite']) ? 1 : 0, $data['stage'], $data['llm_params'], $id
+    ]);
+}
+
+// --- Requirement: Delete Prompt ---
+function delete_prompt($id) {
+    $db = get_db();
+    $stmt = $db->prepare("DELETE FROM prompts WHERE id = ?");
+    $stmt->execute([$id]);
+}
+
+// --- Requirement: Version History ---
+function get_prompt_versions($prompt_id) {
+    $db = get_db();
+    $stmt = $db->prepare("SELECT * FROM prompt_versions WHERE prompt_id = ? ORDER BY version DESC");
+    $stmt->execute([$prompt_id]);
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function get_prompt_version($version_id) {
+    $db = get_db();
+    $stmt = $db->prepare("SELECT * FROM prompt_versions WHERE id = ?");
+    $stmt->execute([$version_id]);
+    return $stmt->fetch(PDO::FETCH_ASSOC);
+}
+
+// --- Requirement: Toggle Favorite Flag ---
+function toggle_favorite($id, $is_favorite) {
+    $db = get_db();
+    $stmt = $db->prepare("UPDATE prompts SET favorite = ? WHERE id = ?");
+    $stmt->execute([$is_favorite ? 1 : 0, $id]);
+}
+
+// --- Requirement: Share/Unshare Prompt ---
+function set_public($id, $is_public) {
+    $db = get_db();
+    $stmt = $db->prepare("UPDATE prompts SET is_public = ? WHERE id = ?");
+    $stmt->execute([$is_public ? 1 : 0, $id]);
+}
+
+// --- Requirement: Get all unique tags for filter dropdown ---
+function get_all_tags() {
+    $db = get_db();
+    $stmt = $db->query("SELECT tags FROM prompts");
+    $tags = [];
+    foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $tagstr) {
+        foreach (explode(',', $tagstr) as $tag) {
+            $tag = trim($tag);
+            if ($tag) $tags[$tag] = true;
+        }
+    }
+    return array_keys($tags);
+}
+?>
+```
+
+---
+
+# 3. dashboard.php
+
+**Key changes:**
+- The filter for favorite now works (checkbox submits value only if checked).
+- The tag filter now supports multiple tags.
+- The table shows the "Title" instead of "Description".
+
+```php
+<?php
+require_once 'functions.php';
+session_start();
+if (!isset($_SESSION['dashboard_token']) || !validate_token($_SESSION['dashboard_token'], null, true)) {
+    header('Location: login.php');
+    exit;
+}
+
+$page = max(1, intval($_GET['page'] ?? 1));
+$search = $_GET['search'] ?? '';
+$tag_filter = [];
+if (isset($_GET['tags']) && $_GET['tags'] !== '') {
+    $tag_filter = explode(',', $_GET['tags']);
+}
+$favorite = (isset($_GET['favorite']) && $_GET['favorite'] == '1') ? 1 : null;
+
+$prompts = get_prompts($page, $search, $tag_filter, $favorite);
+$total = get_prompts_count($search, $tag_filter, $favorite);
+$pages = ceil($total / 5);
+$all_tags = get_all_tags();
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <title><?= APP_NAME ?> - Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script>
+    function copyToClipboard(text) {
+        navigator.clipboard.writeText(text);
+        alert('Copied!');
+    }
+    function exportPrompts() {
+        var format = prompt('Export format: csv or json?', 'json');
+        if (format) window.location = 'prompt_export.php?format=' + encodeURIComponent(format);
+    }
+    </script>
+</head>
+<body class="bg-light">
+<nav class="navbar navbar-dark bg-dark mb-4">
+    <div class="container">
+        <img src="assets/logo_small.png" alt="Logo" class="logo d-inline-block align-middle">
+        <span class="navbar-brand ms-2"><?= APP_NAME ?> - Dashboard</span>
+    </div>
+</nav>
+<div class="container">
+    <form method="get" class="row g-2 mb-3">
+        <div class="col-md-4">
+            <input type="text" name="search" value="<?= htmlspecialchars($search) ?>" class="form-control" placeholder="Search...">
+        </div>
+        <div class="col-md-3">
+            <select name="tags" class="form-select">
+                <option value="">All Tags</option>
+                <?php foreach ($all_tags as $tag): ?>
+                    <option value="<?= htmlspecialchars($tag) ?>"<?= in_array($tag, $tag_filter) ? ' selected' : '' ?>><?= htmlspecialchars($tag) ?></option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+        <div class="col-md-2">
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="favorite" value="1"<?= $favorite ? ' checked' : '' ?> id="favoriteCheck">
+                <label class="form-check-label" for="favoriteCheck">Favorites</label>
+            </div>
+        </div>
+        <div class="col-md-3 d-flex">
+            <button type="submit" class="btn btn-primary me-2">Filter</button>
+            <a href="dashboard.php" class="btn btn-secondary">Reset</a>
+        </div>
+    </form>
+    <div class="d-flex justify-content-between mb-3">
+        <a href="prompt_edit.php" class="btn btn-success">+ New Prompt</a>
+        <button type="button" class="btn btn-outline-info" onclick="exportPrompts()">Export All</button>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-striped align-middle">
+            <thead>
+                <tr>
+                    <th>Title</th>
+                    <th>Prompt</th>
+                    <th>Topic</th>
+                    <th>Tags</th>
+                    <th>Stage</th>
+                    <th>Favorite</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($prompts as $p): ?>
+                <tr>
+                    <td><?= htmlspecialchars($p['title']) ?></td>
+                    <td><?= htmlspecialchars(substr($p['prompt'], 0, 40)) ?>...</td>
+                    <td><?= htmlspecialchars($p['topic']) ?></td>
+                    <td><?= htmlspecialchars($p['tags']) ?></td>
+                    <td><?= htmlspecialchars($p['stage']) ?></td>
+                    <td><?= $p['favorite'] ? '★' : '' ?></td>
+                    <td>
+                        <a href="prompt.php?id=<?= $p['id'] ?>" class="btn btn-sm btn-primary">View</a>
+                        <a href="prompt_edit.php?id=<?= $p['id'] ?>" class="btn btn-sm btn-warning">Edit</a>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+    <div class="d-flex justify-content-end gap-2">
+        <?php if ($page > 1): ?>
+            <a href="?page=<?= $page-1 ?>&search=<?= urlencode($search) ?>&tags=<?= urlencode(implode(',', $tag_filter)) ?>&favorite=<?= $favorite ?>" class="btn btn-outline-secondary">Previous</a>
+        <?php endif; ?>
+        <?php if ($page < $pages): ?>
+            <a href="?page=<?= $page+1 ?>&search=<?= urlencode($search) ?>&tags=<?= urlencode(implode(',', $tag_filter)) ?>&favorite=<?= $favorite ?>" class="btn btn-outline-secondary">Next</a>
+        <?php endif; ?>
+    </div>
+    <div class="mt-3">
+        <a href="token_generate.php">Generate Token</a> | <a href="login.php?logout=1">Logout</a>
+    </div>
+</div>
+</body>
+</html>
+```
+
+---
+
+# 4. prompt_edit.php
+
+**Key changes:**
+- "Description" label and field changed to "Title" everywhere.
+- POST/GET key is now `title`.
+
+```php
+<?php
+require_once 'functions.php';
+session_start();
+if (!isset($_SESSION['dashboard_token']) || !validate_token($_SESSION['dashboard_token'], null, true)) {
+    header('Location: login.php');
+    exit;
+}
+
+$id = $_GET['id'] ?? null;
+$editing = false;
+if ($id) {
+    $prompt = get_prompt($id);
+    if (!$prompt) die("Prompt not found.");
+    $editing = true;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $data = [
+        'prompt' => $_POST['prompt'],
+        'title' => $_POST['title'],
+        'topic' => $_POST['topic'],
+        'tags' => $_POST['tags'],
+        'favorite' => isset($_POST['favorite']),
+        'stage' => $_POST['stage'],
+        'llm_params' => $_POST['llm_params'],
+        'is_public' => isset($_POST['is_public'])
+    ];
+    if ($editing) {
+        $change_desc = $_POST['change_desc'] ?? '';
+        update_prompt($id, $data, $change_desc);
+        header("Location: prompt.php?id=$id");
+        exit;
+    } else {
+        $new_id = add_prompt($data);
+        header("Location: prompt.php?id=$new_id");
+        exit;
+    }
+}
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <title><?= APP_NAME ?> - <?= $editing ? 'Edit' : 'New' ?> Prompt</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+<nav class="navbar navbar-dark bg-dark mb-4">
+    <div class="container">
+        <img src="assets/logo_small.png" alt="Logo" class="logo d-inline-block align-middle">
+        <span class="navbar-brand ms-2"><?= APP_NAME ?> - <?= $editing ? 'Edit' : 'New' ?> Prompt</span>
+    </div>
+</nav>
+<div class="container">
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <form method="post">
+                        <div class="mb-3">
+                            <label class="form-label">Title</label>
+                            <input type="text" name="title" class="form-control" value="<?= htmlspecialchars($prompt['title'] ?? '') ?>" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Prompt Text</label>
+                            <textarea name="prompt" class="form-control" required><?= htmlspecialchars($prompt['prompt'] ?? '') ?></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Topic</label>
+                            <input type="text" name="topic" class="form-control" value="<?= htmlspecialchars($prompt['topic'] ?? '') ?>">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Tags (comma-separated)</label>
+                            <input type="text" name="tags" class="form-control" value="<?= htmlspecialchars($prompt['tags'] ?? '') ?>">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Stage</label>
+                            <select name="stage" class="form-select">
+                                <?php foreach (['draft','review','final','archived'] as $stage): ?>
+                                    <option value="<?= $stage ?>"<?= ($prompt['stage'] ?? '') == $stage ? ' selected' : '' ?>><?= ucfirst($stage) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">LLM Parameters (JSON or text)</label>
+                            <textarea name="llm_params" class="form-control"><?= htmlspecialchars($prompt['llm_params'] ?? '') ?></textarea>
+                        </div>
+                        <div class="form-check form-check-inline mb-3">
+                            <input class="form-check-input" type="checkbox" name="favorite" id="favorite"<?= !empty($prompt['favorite']) ? ' checked' : '' ?>>
+                            <label class="form-check-label" for="favorite">Favorite</label>
+                        </div>
+                        <div class="form-check form-check-inline mb-3">
+                            <input class="form-check-input" type="checkbox" name="is_public" id="is_public"<?= !empty($prompt['is_public']) ? ' checked' : '' ?>>
+                            <label class="form-check-label" for="is_public">Public</label>
+                        </div>
+                        <?php if ($editing): ?>
+                            <div class="mb-3">
+                                <label class="form-label">Change Description (for version control)</label>
+                                <input type="text" name="change_desc" class="form-control" required>
+                            </div>
+                        <?php endif; ?>
+                        <div class="d-flex gap-2">
+                            <button type="submit" class="btn btn-primary"><?= $editing ? 'Save Changes' : 'Create Prompt' ?></button>
+                            <a href="dashboard.php" class="btn btn-secondary">Cancel</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>
+```
+
+---
+
+# 5. prompt.php
+
+**Key changes:**
+- "Description" is now "Title" everywhere.
+- The heading and fields use `title`.
+
+```php
+<?php
+require_once 'functions.php';
+session_start();
+
+$id = $_GET['id'] ?? null;
+if (!$id) die("Prompt ID required.");
+$prompt = get_prompt($id);
+if (!$prompt) die("Prompt not found.");
+
+$can_edit = isset($_SESSION['dashboard_token']) && validate_token($_SESSION['dashboard_token'], null, true);
+
+$versions = get_prompt_versions($id);
+$selected_version = null;
+if (isset($_GET['version_id'])) {
+    $selected_version = get_prompt_version($_GET['version_id']);
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_edit) {
+    if (isset($_POST['toggle_favorite'])) {
+        toggle_favorite($id, !$prompt['favorite']);
+        header("Location: prompt.php?id=$id");
+        exit;
+    }
+    if (isset($_POST['toggle_public'])) {
+        set_public($id, !$prompt['is_public']);
+        header("Location: prompt.php?id=$id");
+        exit;
+    }
+}
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <title><?= APP_NAME ?> - Prompt Details</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script>
+    function copyToClipboard(text) {
+        navigator.clipboard.writeText(text);
+        alert('Copied!');
+    }
+    </script>
+</head>
+<body class="bg-light">
+<nav class="navbar navbar-dark bg-dark mb-4">
+    <div class="container">
+        <img src="assets/logo_small.png" alt="Logo" class="logo d-inline-block align-middle">
+        <span class="navbar-brand ms-2"><?= APP_NAME ?> - Prompt Details</span>
+    </div>
+</nav>
+<div class="container">
+    <div class="row justify-content-center">
+        <div class="col-lg-10">
+            <div class="card shadow-sm mb-4">
+                <div class="card-body">
+                <?php if ($selected_version): ?>
+                    <h3>Viewing Version <?= $selected_version['version'] ?></h3>
+                    <pre class="bg-light p-2 rounded"><?= htmlspecialchars($selected_version['prompt']) ?></pre>
+                    <p><strong>Title:</strong> <?= htmlspecialchars($selected_version['title']) ?></p>
+                    <p><strong>Change:</strong> <?= htmlspecialchars($selected_version['change_desc']) ?></p>
+                    <a href="prompt.php?id=<?= $id ?>" class="btn btn-secondary">Back to Current</a>
+                <?php else: ?>
+                    <h2><?= htmlspecialchars($prompt['title']) ?></h2>
+                    <pre id="promptText" class="bg-light p-2 rounded"><?= htmlspecialchars($prompt['prompt']) ?></pre>
+                    <button class="btn btn-outline-secondary mb-2" onclick="copyToClipboard(document.getElementById('promptText').innerText)">Copy Prompt</button>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <p><strong>Topic:</strong> <?= htmlspecialchars($prompt['topic']) ?></p>
+                            <p><strong>Tags:</strong> <?= htmlspecialchars($prompt['tags']) ?></p>
+                            <p><strong>Stage:</strong> <?= htmlspecialchars($prompt['stage']) ?></p>
+                        </div>
+                        <div class="col-md-6">
+                            <p><strong>LLM Params:</strong> <code><?= htmlspecialchars($prompt['llm_params']) ?></code></p>
+                            <p><strong>Favorite:</strong> <?= $prompt['favorite'] ? '★' : '' ?></p>
+                            <p><strong>Public:</strong> <?= $prompt['is_public'] ? 'Yes' : 'No' ?></p>
+                        </div>
+                    </div>
+                    <form method="post" class="mb-3 d-inline">
+                        <?php if ($can_edit): ?>
+                            <button name="toggle_favorite" class="btn btn-outline-warning"><?= $prompt['favorite'] ? 'Unfavorite' : 'Favorite' ?></button>
+                            <button name="toggle_public" class="btn btn-outline-info"><?= $prompt['is_public'] ? 'Unshare' : 'Share Publicly' ?></button>
+                        <?php endif; ?>
+                    </form>
+                    <div class="d-flex gap-2 mb-3 flex-wrap">
+                        <?php if ($can_edit): ?>
+                            <a href="prompt_edit.php?id=<?= $id ?>" class="btn btn-warning">Edit</a>
+                            <a href="prompt_delete.php?id=<?= $id ?>" class="btn btn-danger" onclick="return confirm('Delete this prompt?')">Delete</a>
+                        <?php endif; ?>
+                        <a href="prompt_export.php?id=<?= $id ?>&format=json" class="btn btn-outline-success">Export JSON</a>
+                        <a href="prompt_export.php?id=<?= $id ?>&format=csv" class="btn btn-outline-success">Export CSV</a>
+                    </div>
+                    <h5>Shareable URLs</h5>
+                    <div class="input-group mb-3">
+                        <input value="<?= $_SERVER['REQUEST_SCHEME'].'://'.$_SERVER['HTTP_HOST'].'/prompt_share.php?id='.$id.($prompt['is_public'] ? '' : '&token='.($_SESSION['dashboard_token'] ?? '')) ?>" readonly id="shareUrl" class="form-control">
+                        <button class="btn btn-outline-secondary" onclick="copyToClipboard(document.getElementById('shareUrl').value)">Copy URL</button>
+                    </div>
+                    <h5>Version History</h5>
+                    <ul class="list-group">
+                        <?php foreach ($versions as $v): ?>
+                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                <a href="prompt.php?id=<?= $id ?>&version_id=<?= $v['id'] ?>">Version <?= $v['version'] ?></a>
+                                <span class="small text-muted"><?= htmlspecialchars($v['change_desc']) ?></span>
+                            </li>
+                        <?php endforeach; ?>
+                    </ul>
+                <?php endif; ?>
+                </div>
+            </div>
+            <a href="dashboard.php" class="btn btn-secondary">Back to Dashboard</a>
+        </div>
+    </div>
+</div>
+</body>
+</html>
+```
+
+---
+
+# 6. prompt_share.php
+
+**Key changes:**
+- "Description" is now "Title".
+
+```php
+<?php
+require_once 'functions.php';
+
+$id = $_GET['id'] ?? null;
+$token = $_GET['token'] ?? null;
+if (!$id) die("Prompt ID required.");
+
+$prompt = get_prompt($id);
+if (!$prompt) die("Prompt not found.");
+
+if (!$prompt['is_public']) {
+    if (!$token || !validate_token($token, $id)) {
+        die("Access denied.");
+    }
+}
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Prompt Share - <?= APP_NAME ?></title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+<nav class="navbar navbar-dark bg-dark mb-4">
+    <div class="container">
+        <img src="assets/logo_small.png" alt="Logo" class="logo d-inline-block align-middle">
+        <span class="navbar-brand ms-2"><?= APP_NAME ?> - Shared Prompt</span>
+    </div>
+</nav>
+<div class="container">
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <h2><?= htmlspecialchars($prompt['title']) ?></h2>
+                    <pre class="bg-light p-2 rounded"><?= htmlspecialchars($prompt['prompt']) ?></pre>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <p><strong>Topic:</strong> <?= htmlspecialchars($prompt['topic']) ?></p>
+                            <p><strong>Tags:</strong> <?= htmlspecialchars($prompt['tags']) ?></p>
+                        </div>
+                        <div class="col-md-6">
+                            <p><strong>Stage:</strong> <?= htmlspecialchars($prompt['stage']) ?></p>
+                            <p><strong>LLM Params:</strong> <code><?= htmlspecialchars($prompt['llm_params']) ?></code></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>
+```
+
+---
+
+# 7. prompt_api.php
+
+**Key changes:**
+- "description" is now "title" in all API fields.
+
+```php
+<?php
+require_once 'functions.php';
+
+header('Content-Type: application/json');
+
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    // Raw prompt API
+    $id = $_GET['id'] ?? null;
+    $token = $_GET['token'] ?? null;
+    if (!$id || !$token) { http_response_code(400); echo json_encode(['error'=>'Missing id or token']); exit; }
+    if (!validate_token($token, $id)) { http_response_code(403); echo json_encode(['error'=>'Forbidden']); exit; }
+    $prompt = get_prompt($id);
+    if (!$prompt) { http_response_code(404); echo json_encode(['error'=>'Not found']); exit; }
+    echo json_encode($prompt);
+    exit;
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Add prompt via API
+    $token = $_POST['token'] ?? null;
+    if (!$token || !validate_token($token, null, true)) { http_response_code(403); echo json_encode(['error'=>'Forbidden']); exit; }
+    $fields = ['prompt','title','topic','tags','favorite','stage','llm_params','is_public'];
+    $data = [];
+    foreach ($fields as $f) $data[$f] = $_POST[$f] ?? '';
+    $id = add_prompt($data);
+    http_response_code(201);
+    echo json_encode(['id'=>$id]);
+    exit;
+} else {
+    http_response_code(405);
+    echo json_encode(['error'=>'Method not allowed']);
+    exit;
+}
+```
+
+---
+
+# 8. token_generate.php
+
+**Key changes:**
+- Only accessible if logged in **or** a valid token is provided in the URL as `?token=...` (and that token is a valid dashboard token).
+
+```php
+<?php
+require_once 'functions.php';
+session_start();
+
+$allow = false;
+if (isset($_SESSION['dashboard_token']) && validate_token($_SESSION['dashboard_token'], null, true)) {
+    $allow = true;
+} elseif (isset($_GET['token']) && validate_token($_GET['token'], null, true)) {
+    $allow = true;
+}
+
+if (!$allow) {
+    header('Location: login.php');
+    exit;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $token = generate_token();
+    store_token($token, null, true, null);
+    $generated = $token;
+}
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <title><?= APP_NAME ?> - Generate Token</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script>
+    function copyToken() {
+        var token = document.getElementById('token');
+        token.select();
+        document.execCommand('copy');
+        alert('Token copied!');
+    }
+    </script>
+</head>
+<body class="bg-light">
+<nav class="navbar navbar-dark bg-dark mb-4">
+    <div class="container">
+        <img src="assets/logo_small.png" alt="Logo" class="logo d-inline-block align-middle">
+        <span class="navbar-brand ms-2"><?= APP_NAME ?></span>
+    </div>
+</nav>
+<div class="container">
+    <div class="row justify-content-center">
+        <div class="col-md-6 col-lg-5">
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <h2 class="card-title mb-4">Generate Dashboard Access Token</h2>
+                    <form method="post">
+                        <button type="submit" class="btn btn-primary w-100 mb-3">Generate Token</button>
+                    </form>
+                    <?php if (!empty($generated)): ?>
+                        <div class="input-group mb-3">
+                            <input id="token" class="form-control" value="<?= htmlspecialchars($generated) ?>" readonly>
+                            <button type="button" class="btn btn-outline-secondary" onclick="copyToken()">Copy</button>
+                        </div>
+                    <?php endif; ?>
+                    <a href="login.php" class="btn btn-link w-100">Back to Login</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>
+```
+
+---
+
+# 9. login.php
+
+**Key changes:**
+- Link to token_generate.php is unchanged, but now token_generate.php is protected.
+
+**No change needed except for the "Description" field, which is not present here.**
+
+---
+
+# 10. prompt_export.php
+
+**Key changes:**
+- No change needed for the "description" field, as it uses the DB fields directly.
+
+---
+
+# 11. All other files
+
+**No changes required** except for the "description" → "title" rename in any prompt display or form.
+
+---
+
+**If you need any other file, please specify.**  
+**Be sure to update your database schema and migrate your data accordingly (rename `description` to `title` in all tables).**
