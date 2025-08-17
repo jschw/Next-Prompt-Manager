@@ -20,7 +20,7 @@
 
 - **Dashboard with Pagination & Filters:**  
   View all prompts, search fulltext, filter by tags or favorites, and paginate through results.
-  <img src="media/Screenshots/Merged_dashboard.png" width=640>
+  <img src="media/Screenshots/Merged_dashboard.png">
   <img src="media/Screenshots/Filter_function.png">
 
 - **Prompt Editing & Deletion:**  
@@ -31,7 +31,7 @@
 
 - **Prompt Sharing:**  
   Share prompts via a public URL or a secure tokenized link. Copy shareable URLs to clipboard.
-  <img src="media/Screenshots/Merged_prompt_display.png" width=640>
+  <img src="media/Screenshots/Merged_prompt_display.png">
 
 - **Export Prompts:**  
   Export one or all prompts as CSV or JSON files.
