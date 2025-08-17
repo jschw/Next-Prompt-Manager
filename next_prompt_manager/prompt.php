@@ -1,5 +1,7 @@
 <?php
 require_once 'functions.php';
+include 'phpqrcode/qrlib.php';
+
 session_start();
 
 $id = $_GET['id'] ?? null;
@@ -32,6 +34,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_edit) {
 <html>
 <head>
     <title><?= APP_NAME ?> - Prompt Details</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <script>
     function copyToClipboard(text) {
@@ -93,6 +96,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_edit) {
                         <input value="<?= $_SERVER['REQUEST_SCHEME'].'://'.$_SERVER['HTTP_HOST'].'/prompt_share.php?id='.$id.($prompt['is_public'] ? '' : '&token='.($_SESSION['dashboard_token'] ?? '')) ?>" readonly id="shareUrl" class="form-control">
                         <button class="btn btn-outline-secondary" onclick="copyToClipboard(document.getElementById('shareUrl').value)">Copy URL</button>
                     </div>
+                    <?php
+                        if ($prompt['is_public']):
+                            // Display only if prompt was public shared
+                            echo '<h5>Shareable URL as QR Code</h5>';
+                            echo '<div class="input-group mb-3">';
+
+                            $shareurl = $_SERVER['REQUEST_SCHEME'].'://'.$_SERVER['HTTP_HOST'].'/prompt_share.php?id='.$id.($prompt['is_public'] ? '' : '&token='.($_SESSION['dashboard_token'] ?? ''));
+
+                            echo '<img src="qr_generate.php?id='.$shareurl.'" />';
+                            echo '</div>';
+                        endif;
+                    ?>
                     <h5>Version History</h5>
                     <ul class="list-group">
                         <?php foreach ($versions as $v): ?>

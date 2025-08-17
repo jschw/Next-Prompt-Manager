@@ -42,7 +42,7 @@ CREATE TABLE access_tokens (
     FOREIGN KEY (prompt_id) REFERENCES prompts(id) ON DELETE CASCADE
 );
 
-INSERT INTO access_tokens (token, prompt_id, is_dashboard_token, expires_at) VALUES (3141593, null, 1, null)
+INSERT INTO access_tokens (token, prompt_id, is_dashboard_token, expires_at) VALUES (3141593, null, 1, null);
 
 -- Table: tags (optional)
 CREATE TABLE tags (

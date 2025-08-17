@@ -1,0 +1,15 @@
+<?php
+    include 'phpqrcode/qrlib.php';
+        
+    $param = $_GET['id'];
+    
+    ob_start("callback");
+
+    $codeText = $param;
+
+    $debugLog = ob_get_contents();
+    ob_end_clean();
+    
+    // outputs image directly into browser, as PNG stream
+    QRcode::png($codeText);
+?>
