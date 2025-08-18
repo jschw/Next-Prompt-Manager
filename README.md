@@ -5,10 +5,11 @@
 > **Human note:**
 > The whole application source code, DB schema,README and even the logo header was created by the GPT-4.1 LLM model. It should demonstrate that small software projects can be developed extremely fast with some knowledge about SW development and appropriate prompting methods. This app was created in a few hours and my PHP/Bootstrap knowledge is very low... 😉
 
+Link to article on "medium" about the whole development process (also written by GPT-4.1):
+
+https://julianschweigert.medium.com/ai-assisted-programming-with-llms-a-case-study-in-end-to-end-application-development-f432daa2b7ca
+
 ---
-
-
-
 
 ## Key Features
 
