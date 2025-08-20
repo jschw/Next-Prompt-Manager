@@ -1,5 +1,6 @@
 <?php
 require_once 'functions.php';
+require_once 'config.php';
 include 'phpqrcode/qrlib.php';
 
 session_start();
@@ -93,7 +94,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_edit) {
                     </div>
                     <h5>Shareable URLs</h5>
                     <div class="input-group mb-3">
-                        <input value="<?= $_SERVER['REQUEST_SCHEME'].'://'.$_SERVER['HTTP_HOST'].'/prompt_share.php?id='.$id.($prompt['is_public'] ? '' : '&token='.($_SESSION['dashboard_token'] ?? '')) ?>" readonly id="shareUrl" class="form-control">
+                        <input value="<?= $_SERVER['REQUEST_SCHEME'].'://'.$_SERVER['HTTP_HOST'].APP_SUBFOLDER.'/prompt_share.php?id='.$id.($prompt['is_public'] ? '' : '&token='.($_SESSION['dashboard_token'] ?? '')) ?>" readonly id="shareUrl" class="form-control">
                         <button class="btn btn-outline-secondary" onclick="copyToClipboard(document.getElementById('shareUrl').value)">Copy URL</button>
                     </div>
                     <?php
@@ -102,7 +103,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_edit) {
                             echo '<h5>Shareable URL as QR Code</h5>';
                             echo '<div class="input-group mb-3">';
 
-                            $shareurl = $_SERVER['REQUEST_SCHEME'].'://'.$_SERVER['HTTP_HOST'].'/prompt_share.php?id='.$id.($prompt['is_public'] ? '' : '&token='.($_SESSION['dashboard_token'] ?? ''));
+                            $shareurl = $_SERVER['REQUEST_SCHEME'].'://'.$_SERVER['HTTP_HOST'].APP_SUBFOLDER.'/prompt_share.php?id='.$id.($prompt['is_public'] ? '' : '&token='.($_SESSION['dashboard_token'] ?? ''));
 
                             echo '<img src="qr_generate.php?id='.$shareurl.'" />';
                             echo '</div>';

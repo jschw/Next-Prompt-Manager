@@ -1,6 +1,24 @@
 <?php
 require_once 'functions.php';
+require_once 'config.php';
+
 session_start();
+
+// --- Allow dashboard access via ?token=... ---
+if (isset($_GET['token'])) {
+    $token = trim($_GET['token']);
+    if (validate_token($token, null, true)) {
+        $_SESSION['dashboard_token'] = $token;
+        // Optionally, redirect to remove token from URL
+        header('Location: dashboard.php');
+        exit;
+    } else {
+        // Invalid token
+        header('Location: login.php?error=1');
+        exit;
+    }
+}
+
 if (!isset($_SESSION['dashboard_token']) || !validate_token($_SESSION['dashboard_token'], null, true)) {
     header('Location: login.php');
     exit;
@@ -16,7 +34,7 @@ $favorite = (isset($_GET['favorite']) && $_GET['favorite'] == '1') ? 1 : null;
 
 $prompts = get_prompts($page, $search, $tag_filter, $favorite);
 $total = get_prompts_count($search, $tag_filter, $favorite);
-$pages = ceil($total / 5);
+$pages = ceil($total / APP_DASH_PAGINATION_NUM);
 $all_tags = get_all_tags();
 ?>
 <!DOCTYPE html>
@@ -111,7 +129,7 @@ $all_tags = get_all_tags();
         <?php endif; ?>
     </div>
     <div class="mt-3">
-        <a href="token_generate.php">Generate Token</a> | <a href="login.php?logout=1">Logout</a>
+        <a href="token_generate.php">Generate Token</a> | <a href="logout.php">Logout</a>
     </div>
 </div>
 </body>

@@ -1,8 +1,9 @@
 <?php
 require_once 'db.php';
+require_once 'config.php';
 
 // --- Requirement: Generate UID Access Token ---
-function generate_token($length = 64) {
+function generate_token($length = 16) {
     return bin2hex(random_bytes($length / 2));
 }
 
@@ -49,7 +50,7 @@ function add_prompt($data) {
 // --- Requirement: Retrieve and Display All Prompts (with pagination, search, filters) ---
 function get_prompts($page = 1, $search = '', $tags = [], $favorite = null) {
     $db = get_db();
-    $limit = 5;
+    $limit = APP_DASH_PAGINATION_NUM;
     $offset = ($page - 1) * $limit;
     $where = [];
     $params = [];

@@ -2,6 +2,12 @@
 require_once 'functions.php';
 session_start();
 
+// If already logged in, redirect to dashboard
+if (isset($_SESSION['dashboard_token']) && validate_token($_SESSION['dashboard_token'], null, true)) {
+    header('Location: dashboard.php');
+    exit;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $token = trim($_POST['token']);
     if (validate_token($token, null, true)) {
@@ -11,13 +17,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         $error = "Invalid token.";
     }
+} elseif (isset($_GET['error'])) {
+    $error = "Invalid token.";
 }
 ?>
 <!DOCTYPE html>
 <html>
 <head>
     <title><?= APP_NAME ?> - Login</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
 <body class="bg-light">
